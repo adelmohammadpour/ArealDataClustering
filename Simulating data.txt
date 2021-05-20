@@ -1,0 +1,254 @@
+
+#### ************************************************************************************** ####
+####                                                                                        #### 
+####  Generating data using the three-component mixture of bivariate Sub-Gaussian Stable    ####
+####                                                                                        ####
+#### ************************************************************************************** ####
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####                   Installing the needed packages                            #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+library(sp)           ## for reading spatial data (shape file) 
+library(raster)       ## for reading spatial data 
+library(spdep)        ## for function'poly2nb' 
+library("fBasics")    ## for function'kron' 
+library("Rfast")      ## for function 'rmvnorm'
+library("stable")     ## for function 'rstable'
+library(clusterSim)   ## for scaling data
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####       Downloading and reading the map information of Luxembourg country     #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+
+###  Downloading the map information of Luxembourg country:
+
+# https://gadm.org/download_country_v3.html
+
+
+
+###   Reading the map information from address that we store it: 
+
+Lux3 <- readRDS("C:/.../Desktop/gadm36_LUX_3_sp.rds")   
+Lux3
+
+##class       : SpatialPolygonsDataFrame 
+##features    : 116                            #### number of cities 
+##extent      : 5.74414, 6.530775, 49.44781, 50.18162  (xmin, xmax, ymin, ymax)
+##crs         : +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 
+##variables   : 16
+##names       : GID_0,     NAME_0,   GID_1,     NAME_1, NL_NAME_1,     GID_2, ... 
+##min values  :   LUX, Luxembourg, LUX.1_1,   Diekirch,        NA, LUX.1.1_1, ... 
+##max values  :   LUX, Luxembourg, LUX.3_1, Luxembourg,        NA, LUX.3.4_1, ... 
+
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####     creating "queen", "rook", "Delaunay" and "distance-based" neighbors     #####
+#####     list object, listw object, neighborhood matrix and links.               #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+
+###--------------------------------     "Queen" neighbors      ---------------------------------
+
+Lux.neighborslist.queen=poly2nb(Lux3,queen=TRUE)     ##creating neighbors list.    
+Lux.nblistw.queen =nb2listw(Lux.neighborslist.queen, style="B", zero.policy = TRUE)   ##creating listw object
+Lux.adj.matrix.queen = nb2mat(Lux.neighborslist.queen, style="B", zero.policy = TRUE) ##creating neighborhood matrix 
+neighbors.queen = listw2sn(Lux.nblistw.queen)[,1:2]    ##links
+
+
+###--------------------------------     "Rook" neighbors      ----------------------------------
+
+Lux.neighborslist.rook = poly2nb(Lux3, queen=FALSE)      
+Lux.nblistw.rook =nb2listw(Lux.neighborslist.rook, style="B", zero.policy = TRUE) 
+Lux.adj.matrix.rook = nb2mat(Lux.neighborslist.rook, style="B", , zero.policy = TRUE) 
+neighbors.rook = listw2sn(Lux.nblistw.rook)[,1:2]  
+
+
+###--------------------------------    "Delaunay" neighbors    ----------------------------------
+
+Lux.neighborslist.Delaunay = tri2nb(coordinates(Lux3))      
+Lux.nblistw.Delaunay =nb2listw(Lux.neighborslist.Delaunay, style="B", zero.policy = TRUE )  
+Lux.adj.matrix.Delaunay= nb2mat(Lux.neighborslist.Delaunay, style="B", zero.policy = TRUE) 
+neighbors.Delaunay = listw2sn(Lux.nblistw.Delaunay)[,1:2]  
+
+
+#-----------------------------     "distance-based" neighbors      ------------------------------
+## k-nearest neighbour objects(k=1)  
+## this is Non-symmetric neighbours matrix. So we creat symmetric neighbours matrix.
+
+k.near.neigh.list1 = knn2nb(knearneigh(coordinates(Lux3), k = 1))  ## k-nearest neighbour objects(k=1) 
+dist.numeric1 <- unlist(nbdists(k.near.neigh.list1, coordinates(Lux3)))   
+Lux.neighborslist.k1 <- dnearneigh(coordinates(Lux3), d1 = 0, d2 = 1.5 * max(dist.numeric1))
+Lux.nblistw.k1=nb2listw(Lux.neighborslist.k1, style="B", zero.policy = TRUE )  ##creating listw object 
+Lux.adj.matrix.dist1= nb2mat(Lux.neighborslist.k1, style="B", zero.policy = TRUE)
+neighbors.Dist= listw2sn(Lux.nblistw.k1)[,1:2]  
+
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####    Creating diagonal matrix D according to each of neighborhood matrices    #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+i.queen = rowSums(Lux.adj.matrix.queen)
+D.queen =diag(i.queen)       
+
+i.rook = rowSums(Lux.adj.matrix.rook)
+D.rook =diag(i.rook)  
+
+i.Delaunay = rowSums(Lux.adj.matrix.Delaunay)
+D.Delaunay =diag(i.Delaunay)  
+
+i.dist1 = rowSums(Lux.adj.matrix.dist1)
+D.Dist=diag(i.dist1)
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####                      Creating diagonal matrix Lambda                        #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+## for two variable (p=2)
+## We let arbitrary values for parameters tau1 and tau2:
+
+tau1=tau2=10
+Lambda=diag(c(tau1, tau2))
+
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####       Creating Sigma matrix according to each of neighborhood matrices      #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+#### Kronecker Product:  function "kron" in package "fBasics" 
+
+rho=0.5     ### value for spatial autocorrelation parameter 
+
+
+Sigma= solve(kron(Lambda, (D.queen - (rho * Lux.adj.matrix.queen))))
+#Sigma= solve(kron(Lambda, (D.rook - (rho * Lux.adj.matrix.rook))))
+#Sigma= solve(kron(Lambda, (D.Delaunay - (rho * Lux.adj.matrix.Delaunay))))
+#Sigma= solve(kron(Lambda, (D.Dist- (rho * Lux.adj.matrix.dist1))))
+
+
+dim(Sigma)
+## [1] 232 232
+
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####                   Primary location vector from 3 classes                    #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+## We let arbitrary values for parameters of location vector
+
+c1=matrix(rep(0,43))
+c2=matrix(rep(2,26)) 
+c3=matrix(rep(-2,47))
+c4=matrix(rep(0,43))
+c5=matrix(rep(3,26)) 
+c6=matrix(rep(3,47))
+
+Delta0=rbind(c1,c2,c3,c4,c5,c6)
+Delta0
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####                             Creating a mean vector                          #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+Mu=rep(0,ncol(Sigma))      ## or: matrix(0, ncol=ncol(Sigma), nrow=1)  
+
+length(Mu)
+##[1] 232
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####              Generating multivariate Gaussian distribution                  #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+RMVNORMAL=rmvnorm(1, Mu, Sigma)
+
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####                  Generating positive stable distribution                    #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+#### function:rstable(n, loc, disp, skew, tail, eps)  from "stable" package
+
+
+alpha = 1.75
+a = (alpha/2)
+b = (cos(pi*alpha/4))^(2/alpha)
+
+
+RSTABLE=rstable(1,0,b,1,a, eps = 0.001)   
+
+
+
+#####-----------------------------------------------------------------------------#####
+#####                                                                             #####
+#####        Generating matrix of bivariate areal data from 3 classes             #####
+#####                                                                             #####
+#####-----------------------------------------------------------------------------#####
+
+y0= sqrt(RSTABLE)*RMVNORMAL
+
+
+
+### location parameter from 3 classes (transform to original geneted data):
+
+m1=Delta0[1:116]*sqrt(var(y0[1:116]))+mean(y0[1:116])
+m2=Delta0[117:232]*sqrt(var(y0[117:232]))+mean(y0[117:232])
+Delta=c(m1,m2)
+
+
+Y=Delta+y0
+Y.mat=matrix(Y, ncol=2, byrow=FALSE, dimnames = list(c(Lux3$"NAME_3"), c("Var1", "Var2")))
+
+#plot(Y.mat)
+
+
+
+### scaling data:
+
+data = data.frame(Y.mat)
+data1 = data.Normalization(data, type = 'n1', normalization = 'column')
+plot(data1)
+
+
+
+
+
+
